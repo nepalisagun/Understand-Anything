@@ -10,7 +10,8 @@ import NodeInfo from "./NodeInfo";
 import ProjectOverview from "./ProjectOverview";
 import FileExplorer from "./FileExplorer";
 import WarningBanner from "./WarningBanner";
-import StalenessBanner, { type GraphFreshnessResult } from "./StalenessBanner";
+import StalenessBanner from "./StalenessBanner";
+import type { DashboardFreshnessReport } from "../freshness";
 import MobileBottomNav from "./MobileBottomNav";
 import type { MobileTab } from "./MobileBottomNav";
 import MobileDrawer from "./MobileDrawer";
@@ -26,7 +27,7 @@ interface Props {
   setShowKeyboardHelp: (value: boolean) => void;
   loadError: string | null;
   allIssues: GraphIssue[];
-  graphFreshness: GraphFreshnessResult | null;
+  graphFreshness: DashboardFreshnessReport | null;
   shortcuts: import("../hooks/useKeyboardShortcuts").KeyboardShortcut[];
 }
 

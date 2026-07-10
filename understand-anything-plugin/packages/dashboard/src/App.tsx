@@ -15,10 +15,7 @@ import PersonaSelector from "./components/PersonaSelector";
 import ProjectOverview from "./components/ProjectOverview";
 import FileExplorer from "./components/FileExplorer";
 import WarningBanner from "./components/WarningBanner";
-import StalenessBanner, {
-  isGraphFreshnessResult,
-  type GraphFreshnessResult,
-} from "./components/StalenessBanner";
+import StalenessBanner from "./components/StalenessBanner";
 import TokenGate from "./components/TokenGate";
 import MobileLayout from "./components/MobileLayout";
 import { useIsMobile } from "./hooks/useIsMobile";
@@ -28,6 +25,12 @@ import { ThemeProvider } from "./themes/index.ts";
 import { ThemePicker } from "./components/ThemePicker.tsx";
 import type { ThemeConfig } from "./themes/index.ts";
 import { I18nProvider, useI18n } from "./contexts/I18nContext.tsx";
+import {
+  requestFreshnessReport,
+  shouldRequestFreshness,
+  startFreshnessRefresh,
+  type DashboardFreshnessReport,
+} from "./freshness";
 
 // Lazy-load heavy / optional components so they ship in separate chunks.
 const CodeViewer = lazy(() => import("./components/CodeViewer"));
@@ -118,7 +121,8 @@ function Dashboard({ accessToken }: { accessToken: string }) {
   const setDiffOverlay = useDashboardStore((s) => s.setDiffOverlay);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [graphIssues, setGraphIssues] = useState<GraphIssue[]>([]);
-  const [graphFreshness, setGraphFreshness] = useState<GraphFreshnessResult | null>(null);
+  const [graphFreshness, setGraphFreshness] =
+    useState<DashboardFreshnessReport | null>(null);
   const [metaTheme, setMetaTheme] = useState<ThemeConfig | null>(null);
   const [outputLanguage, setOutputLanguage] = useState<string | undefined>();
 
@@ -171,14 +175,25 @@ function Dashboard({ accessToken }: { accessToken: string }) {
   }, [setGraph]);
 
   useEffect(() => {
-    fetch(dataUrl("staleness.json", accessToken))
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: unknown) => {
-        if (isGraphFreshnessResult(data)) {
-          setGraphFreshness(data);
-        }
-      })
-      .catch(() => {});
+    if (
+      !shouldRequestFreshness(
+        DEMO_MODE,
+        import.meta.env.VITE_STALENESS_URL,
+      )
+    ) {
+      setGraphFreshness(null);
+      return;
+    }
+
+    return startFreshnessRefresh({
+      target: window,
+      load: (signal) =>
+        requestFreshnessReport(
+          dataUrl("staleness.json", accessToken),
+          signal,
+        ),
+      onResult: setGraphFreshness,
+    });
   }, [accessToken]);
 
   useEffect(() => {
@@ -246,7 +261,7 @@ function DashboardContent({
   accessToken: string;
   loadError: string | null;
   graphIssues: GraphIssue[];
-  graphFreshness: GraphFreshnessResult | null;
+  graphFreshness: DashboardFreshnessReport | null;
 }) {
   const graph = useDashboardStore((s) => s.graph);
   const selectedNodeId = useDashboardStore((s) => s.selectedNodeId);

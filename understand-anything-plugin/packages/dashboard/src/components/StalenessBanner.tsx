@@ -1,41 +1,12 @@
 import { useState } from "react";
-
-export type GraphFreshnessResult =
-  | {
-      status: "fresh";
-      graphCommitHash: string;
-      headCommitHash: string;
-      changedFileCount: 0;
-      changedFiles: [];
-      commitsBehind: 0;
-      lastAnalyzedAt?: string;
-    }
-  | {
-      status: "stale";
-      graphCommitHash: string;
-      headCommitHash: string;
-      changedFileCount: number;
-      changedFiles: string[];
-      commitsBehind: number;
-      lastAnalyzedAt?: string;
-    }
-  | {
-      status: "unknown";
-      reason:
-        | "missing-graph-commit"
-        | "git-head-unavailable"
-        | "graph-commit-unavailable";
-      graphCommitHash?: string;
-      headCommitHash?: string;
-      lastAnalyzedAt?: string;
-    };
-type UnknownGraphFreshnessReason = Extract<
+import type {
+  DashboardFreshnessReport,
   GraphFreshnessResult,
-  { status: "unknown" }
->["reason"];
+  GraphFreshnessUnknownReason,
+} from "../freshness";
 
 interface StalenessBannerProps {
-  freshness: GraphFreshnessResult | null;
+  freshness: DashboardFreshnessReport | null;
 }
 
 interface FreshnessBannerContent {
@@ -49,42 +20,143 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`) {
   return `${count} ${count === 1 ? singular : pluralForm}`;
 }
 
-export function isGraphFreshnessResult(data: unknown): data is GraphFreshnessResult {
-  if (!data || typeof data !== "object") return false;
-  const status = (data as { status?: unknown }).status;
-  return status === "fresh" || status === "stale" || status === "unknown";
+type GraphName = "knowledge" | "domain";
+type GraphEntry = { name: GraphName; result: GraphFreshnessResult };
+
+const RISK_RANK: Record<GraphFreshnessResult["status"], number> = {
+  fresh: 0,
+  unknown: 1,
+  dirty: 2,
+  stale: 3,
+};
+
+const unknownSummary: Record<GraphFreshnessUnknownReason, string> = {
+  "missing-graph-commit": "does not include a Git commit hash to compare with HEAD",
+  "git-head-unavailable": "could not be compared because the dashboard could not read Git HEAD",
+  "graph-commit-unavailable": "references a commit that is not available in this checkout",
+  "git-command-timeout": "could not be checked because Git freshness commands timed out",
+  "freshness-request-failed": "could not be refreshed because the freshness request failed",
+};
+
+function graphLabel(name: GraphName): string {
+  return `${name} graph`;
+}
+
+function titleSubject(entries: GraphEntry[]): string {
+  if (entries.length === 2) return "Knowledge and domain graphs";
+  return entries[0].name === "knowledge" ? "Knowledge graph" : "Domain graph";
+}
+
+function changedFilesSentence(count: number): string {
+  return `${plural(count, "file")} ${count === 1 ? "has" : "have"} changed since analysis.`;
+}
+
+function staleSummary(entry: GraphEntry): string {
+  if (entry.result.status !== "stale") return "";
+  const subject = `The ${graphLabel(entry.name)}`;
+  const fileSummary = changedFilesSentence(entry.result.changedFileCount);
+
+  if (entry.result.relation === "behind") {
+    return `${subject} is ${plural(
+      entry.result.commitsBehind,
+      "project commit",
+    )} behind HEAD; ${fileSummary}`;
+  }
+  if (entry.result.relation === "ahead") {
+    return `${subject} comes from a newer project history than HEAD; ${fileSummary}`;
+  }
+  return `${subject} and HEAD come from different project histories; ${fileSummary}`;
+}
+
+function dirtySummary(entry: GraphEntry): string {
+  if (entry.result.status !== "dirty") return "";
+  const fileCount = entry.result.changedFileCount;
+  return `${plural(fileCount, "working-tree file")} ${
+    fileCount === 1 ? "has" : "have"
+  } changed and ${fileCount === 1 ? "is" : "are"} not represented by the ${graphLabel(
+    entry.name,
+  )}'s commit metadata.`;
+}
+
+function unknownEntrySummary(entry: GraphEntry): string {
+  if (entry.result.status !== "unknown") return "";
+  if (entry.result.reason === "freshness-request-failed") {
+    return "The dashboard could not refresh graph freshness data.";
+  }
+  return `The ${graphLabel(entry.name)} ${unknownSummary[entry.result.reason]}.`;
+}
+
+function refreshAction(entries: GraphEntry[]): string {
+  const hasKnowledge = entries.some((entry) => entry.name === "knowledge");
+  const hasDomain = entries.some((entry) => entry.name === "domain");
+  const commands = hasKnowledge && hasDomain
+    ? "/understand and /understand-domain"
+    : hasDomain
+      ? "/understand-domain"
+      : "/understand";
+  return `Run ${commands} to refresh ${entries.length === 1 ? "it" : "them"} before relying on impact or onboarding answers.`;
 }
 
 export function buildFreshnessBanner(
-  freshness: GraphFreshnessResult | null,
+  freshness: DashboardFreshnessReport | null,
 ): FreshnessBannerContent | null {
-  if (!freshness || freshness.status === "fresh") return null;
+  if (!freshness) return null;
+  const entries: GraphEntry[] = [
+    { name: "knowledge", result: freshness.graphs.knowledge },
+  ];
+  if (freshness.graphs.domain) {
+    entries.push({ name: "domain", result: freshness.graphs.domain });
+  }
 
-  if (freshness.status === "stale") {
+  const highestRisk = Math.max(
+    ...entries.map((entry) => RISK_RANK[entry.result.status]),
+  );
+  if (highestRisk === RISK_RANK.fresh) return null;
+
+  const affected = entries.filter(
+    (entry) => RISK_RANK[entry.result.status] === highestRisk,
+  );
+  const status = affected[0].result.status;
+  const changedFiles = [
+    ...new Set(
+      affected.flatMap((entry) =>
+        "changedFiles" in entry.result ? entry.result.changedFiles : [],
+      ),
+    ),
+  ].sort();
+
+  if (status === "stale") {
     return {
-      title: "Knowledge graph may be stale",
-      summary: `The graph was generated ${plural(
-        freshness.commitsBehind,
-        "commit",
-      )} before HEAD and ${plural(
-        freshness.changedFileCount,
-        "file",
-      )} have changed since analysis.`,
-      action: "Run /understand to refresh it before relying on impact or onboarding answers.",
-      changedFiles: freshness.changedFiles,
+      title: `${titleSubject(affected)} may be stale`,
+      summary: affected.map(staleSummary).join(" "),
+      action: refreshAction(affected),
+      changedFiles,
     };
   }
 
-  const summaryByReason: Record<UnknownGraphFreshnessReason, string> = {
-    "missing-graph-commit": "The graph does not include a git commit hash to compare with HEAD.",
-    "git-head-unavailable": "The dashboard could not read git HEAD for this project.",
-    "graph-commit-unavailable": "The graph commit is not available in this checkout.",
-  };
+  if (status === "dirty") {
+    return {
+      title: `${titleSubject(affected)} ${
+        affected.length === 1 ? "has" : "have"
+      } working-tree changes`,
+      summary: affected.map(dirtySummary).join(" "),
+      action: refreshAction(affected),
+      changedFiles,
+    };
+  }
+
+  const requestFailed = affected.some(
+    (entry) =>
+      entry.result.status === "unknown" &&
+      entry.result.reason === "freshness-request-failed",
+  );
 
   return {
-    title: "Graph freshness could not be verified",
-    summary: summaryByReason[freshness.reason],
-    action: "Run /understand to regenerate the graph with current git metadata.",
+    title: `${titleSubject(affected)} freshness could not be verified`,
+    summary: [...new Set(affected.map(unknownEntrySummary))].join(" "),
+    action: requestFailed
+      ? "Refocus the window to retry the freshness check."
+      : refreshAction(affected),
     changedFiles: [],
   };
 }

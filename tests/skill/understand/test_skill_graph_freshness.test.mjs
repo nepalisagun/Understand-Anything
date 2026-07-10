@@ -11,11 +11,29 @@ const graphConsumerSkills = [
   "understand-explain",
   "understand-diff",
   "understand-onboard",
+  "understand-domain",
+];
+
+const requiredFreshnessInstructions = [
+  "gitCommitHash",
+  "git rev-parse HEAD",
+  'git rev-parse --verify --end-of-options "${GRAPH_COMMIT_RAW}^{commit}"',
+  "git diff --name-only \"$GRAPH_COMMIT\" HEAD -- .",
+  "git diff --cached --name-only -- .",
+  "git diff --name-only -- .",
+  "git ls-files --others --exclude-standard -- .",
+  "working-tree",
+  "hash mismatch",
+  "project diff is empty",
+  "Ignore `.understand-anything/`",
+  "warn",
+  "continue",
+  "Run `/understand`",
 ];
 
 describe("graph-consuming skills", () => {
   it.each(graphConsumerSkills)(
-    "%s warns when the knowledge graph commit differs from HEAD",
+    "%s checks committed and working-tree freshness before using a graph",
     (skillName) => {
       const skillPath = resolve(
         repoRoot,
@@ -26,10 +44,28 @@ describe("graph-consuming skills", () => {
       );
       const content = readFileSync(skillPath, "utf-8");
 
-      expect(content).toContain("gitCommitHash");
-      expect(content).toContain("git rev-parse HEAD");
-      expect(content).toContain("stale");
-      expect(content).toContain("Run `/understand`");
+      for (const instruction of requiredFreshnessInstructions) {
+        expect(content).toContain(instruction);
+      }
+      expect(content).not.toContain(
+        'git diff --name-only "$GRAPH_COMMIT_RAW" HEAD -- .',
+      );
     },
   );
+
+  it("understand-domain applies the preflight only to its existing-graph path", () => {
+    const content = readFileSync(
+      resolve(
+        repoRoot,
+        "understand-anything-plugin",
+        "skills",
+        "understand-domain",
+        "SKILL.md",
+      ),
+      "utf-8",
+    );
+
+    expect(content).toContain("When `--full` is used, skip this preflight");
+    expect(content).toContain("Phase 3: Derive from Existing Graph");
+  });
 });

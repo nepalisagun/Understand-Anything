@@ -32,7 +32,20 @@ The knowledge graph JSON has this structure:
 
 1. Check that `.understand-anything/knowledge-graph.json` exists. If not, tell the user to run `/understand` first.
 
-2. **Check graph freshness** — read `project.gitCommitHash` from the graph metadata and run `git rev-parse HEAD` in the project root. If both values exist and differ, warn the user before generating the guide that the knowledge graph may be stale and newer code may be missing from onboarding content. Suggest: Run `/understand` to refresh the graph. If git metadata is missing or unavailable, continue with a brief best-effort warning instead of blocking.
+2. **Check graph freshness before using graph-derived context**:
+   - Read `project.gitCommitHash` from the graph metadata as `GRAPH_COMMIT_RAW`. Resolve it as a commit before using it in any Git diff, then compare it with `git rev-parse HEAD` and inspect project-scoped committed and working-tree changes from the project root:
+     ```bash
+     GRAPH_COMMIT=$(git rev-parse --verify --end-of-options "${GRAPH_COMMIT_RAW}^{commit}" 2>/dev/null)
+     git rev-parse HEAD
+     git diff --name-only "$GRAPH_COMMIT" HEAD -- .
+     git diff --cached --name-only -- .
+     git diff --name-only -- .
+     git ls-files --others --exclude-standard -- .
+     ```
+   - The `-- .` pathspec is required: commits that only touch a sibling monorepo project must not make this graph stale. A hash mismatch alone is not stale when the project diff is empty.
+   - Ignore `.understand-anything/` paths in every command's output because they are generated graph artifacts, not project source drift.
+   - If the committed diff or any working-tree command reports project files, warn before generating the guide that onboarding content may omit those changes. Suggest: Run `/understand` to refresh the graph.
+   - Run the commit diff only when `GRAPH_COMMIT_RAW` resolves successfully. If the graph commit or Git metadata is missing, invalid, or unavailable, give a brief best-effort warning and continue instead of blocking.
 
 3. **Read project metadata** — use Grep or Read with a line limit to extract the `"project"` section (name, description, languages, frameworks).
 

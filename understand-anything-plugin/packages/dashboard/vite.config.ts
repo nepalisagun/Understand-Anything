@@ -5,7 +5,12 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
-import { getGraphFreshness } from "../core/src/staleness";
+import type { IncomingMessage, ServerResponse } from "http";
+import {
+  getGraphFreshnessBatch,
+  type GraphFreshnessInput,
+  type GraphFreshnessResult,
+} from "../core/src/staleness";
 
 // Generate a one-time token when the server process starts.
 // This token is printed to the terminal and must be in the URL
@@ -177,33 +182,98 @@ function readSourceFile(url: URL) {
   };
 }
 
-export function readGraphFreshness() {
-  const graphFile = findGraphFile("knowledge-graph.json");
-  if (!graphFile) {
-    return rejectFileRequest("No knowledge graph found. Run /understand first.", 404);
-  }
+export interface DashboardFreshnessReport {
+  graphs: {
+    knowledge: GraphFreshnessResult;
+    domain?: GraphFreshnessResult;
+  };
+}
 
-  let graph: {
+function readGraphMetadata(graphFile: string): GraphFreshnessInput {
+  const graph = JSON.parse(fs.readFileSync(graphFile, "utf-8")) as {
     project?: {
       gitCommitHash?: unknown;
       analyzedAt?: unknown;
     };
   };
+  return {
+    graphCommitHash:
+      typeof graph.project?.gitCommitHash === "string"
+        ? graph.project.gitCommitHash
+        : undefined,
+    lastAnalyzedAt:
+      typeof graph.project?.analyzedAt === "string"
+        ? graph.project.analyzedAt
+        : undefined,
+  };
+}
+
+export async function readGraphFreshness() {
+  const graphFile = findGraphFile("knowledge-graph.json");
+  if (!graphFile) {
+    return rejectFileRequest("No knowledge graph found. Run /understand first.", 404);
+  }
+
+  const domainGraphFile = path.join(path.dirname(graphFile), "domain-graph.json");
+  let knowledgeInput: GraphFreshnessInput;
+  let domainInput: GraphFreshnessInput | undefined;
   try {
-    graph = JSON.parse(fs.readFileSync(graphFile, "utf-8"));
+    knowledgeInput = readGraphMetadata(graphFile);
+    domainInput = fs.existsSync(domainGraphFile)
+      ? readGraphMetadata(domainGraphFile)
+      : undefined;
   } catch {
     return rejectFileRequest("Failed to read graph file", 500);
   }
 
-  const project = graph.project;
+  const projectRoot = projectRootFromGraphFile(graphFile);
+  let graphs: DashboardFreshnessReport["graphs"];
+  if (domainInput) {
+    graphs = await getGraphFreshnessBatch(projectRoot, {
+      knowledge: knowledgeInput,
+      domain: domainInput,
+    });
+  } else {
+    const result = await getGraphFreshnessBatch(projectRoot, {
+      knowledge: knowledgeInput,
+    });
+    graphs = { knowledge: result.knowledge };
+  }
+
   return {
     statusCode: 200,
-    payload: getGraphFreshness(projectRootFromGraphFile(graphFile), {
-      graphCommitHash:
-        typeof project?.gitCommitHash === "string" ? project.gitCommitHash : undefined,
-      lastAnalyzedAt:
-        typeof project?.analyzedAt === "string" ? project.analyzedAt : undefined,
-    }),
+    payload: { graphs } satisfies DashboardFreshnessReport,
+  };
+}
+
+type DashboardDataMiddleware = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  next: () => void,
+) => void;
+
+export function createDashboardDataMiddleware(
+  accessToken: string,
+): DashboardDataMiddleware {
+  return (req, res, next) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1:5173");
+    if (url.pathname !== "/staleness.json") {
+      next();
+      return;
+    }
+
+    res.setHeader("Cache-Control", "no-store");
+
+    if (url.searchParams.get("token") !== accessToken) {
+      sendJson(res, 403, { error: "Forbidden: missing or invalid token" });
+      return;
+    }
+
+    void readGraphFreshness()
+      .then((result) => sendJson(res, result.statusCode, result.payload))
+      .catch(() => {
+        sendJson(res, 500, { error: "Failed to read graph freshness" });
+      });
   };
 }
 
@@ -282,6 +352,8 @@ const config: DashboardViteConfig = {
           );
         });
 
+        server.middlewares.use(createDashboardDataMiddleware(ACCESS_TOKEN));
+
         server.middlewares.use((req, res, next) => {
           const url = new URL(req.url ?? "/", "http://127.0.0.1:5173");
           const pathname = url.pathname;
@@ -291,7 +363,6 @@ const config: DashboardViteConfig = {
             pathname === "/diff-overlay.json" ||
             pathname === "/meta.json" ||
             pathname === "/config.json" ||
-            pathname === "/staleness.json" ||
             pathname === "/file-content.json";
 
           if (!isProtectedEndpoint) {
@@ -327,12 +398,6 @@ const config: DashboardViteConfig = {
               }
             }
             sendJson(res, 200, { autoUpdate: false, outputLanguage: "en" });
-            return;
-          }
-
-          if (pathname === "/staleness.json") {
-            const result = readGraphFreshness();
-            sendJson(res, result.statusCode, result.payload);
             return;
           }
 

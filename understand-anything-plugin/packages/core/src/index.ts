@@ -33,10 +33,13 @@ export { SearchEngine, type SearchResult, type SearchOptions } from "./search.js
 export {
   getChangedFiles,
   getGraphFreshness,
+  getGraphFreshnessBatch,
   isStale,
   mergeGraphUpdate,
   type GraphFreshnessInput,
+  type GraphFreshnessRelation,
   type GraphFreshnessResult,
+  type GraphFreshnessUnknownReason,
   type StalenessResult,
 } from "./staleness.js";
 export {

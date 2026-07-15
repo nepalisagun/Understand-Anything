@@ -240,6 +240,15 @@ describe("generateStarterIgnoreFile", () => {
       expect(content).toContain("# **/tests.rs");
     });
 
+    it("includes Rust workspace-style *_test.rs and test_*.rs conventions", () => {
+      const content = generateStarterIgnoreFile(testDir);
+      // Dominant in large workspaces (polkadot-sdk, rust-lang/rust,
+      // solana-labs/solana) where tests colocate with source rather
+      // than living inside inline `#[cfg(test)] mod tests`.
+      expect(content).toContain("# **/test_*.rs");
+      expect(content).toContain("# **/*_test.rs");
+    });
+
     it("groups patterns under the JS / TS sub-header", () => {
       const content = generateStarterIgnoreFile(testDir);
       expect(content).toContain("# JS / TS");

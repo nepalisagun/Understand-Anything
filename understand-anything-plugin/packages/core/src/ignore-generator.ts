@@ -123,6 +123,8 @@ const TEST_PATTERN_GROUPS: Array<{ label: string; patterns: string[] }> = [
     label: "Rust",
     patterns: [
       "**/tests.rs",
+      "**/test_*.rs",
+      "**/*_test.rs",
     ],
   },
 ];
